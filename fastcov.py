@@ -241,9 +241,22 @@ def distillFunction(function_raw, functions):
         functions[function_name]["execution_count"] += function_raw["execution_count"]
 
 def filterExceptionalBranches(branches):
-    if any(branch["throw"] for branch in branches):
-        return []
-    return branches
+    filtered_branches = []
+    for i in range(0, len(branches), 2):
+        if i+1 >= len(branches):
+            filtered_branches.append(branches[i])
+            break
+
+        if branches[i+1]["throw"]:
+            continue
+
+        filtered_branches.append(branches[i])
+        filtered_branches.append(branches[i+1])
+
+    return filtered_branches
+    # if any(branch["throw"] for branch in branches):
+    #     return []
+    # return branches
 
 def distillLine(line_raw, lines, branches, include_exceptional_branches):
     line_number = str(line_raw["line_number"])
