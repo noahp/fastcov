@@ -16,7 +16,6 @@
         $ ./fastcov.py --exclude /usr/include test/ --lcov -o report.info
         $ genhtml -o code_coverage report.info
 """
-
 import re
 import os
 import sys
@@ -48,6 +47,13 @@ def stopwatch():
     delta      = end_time - START_TIME
     START_TIME = end_time
     return delta
+
+def logger(line, quiet=True):
+    if not quiet:
+        print("[{:.3f}s] {}".format(stopwatch(), line))
+
+# global logger
+log = logger
 
 def parseVersionFromLine(version_str):
     """Given a string containing a dotted integer version, parse out integers and return as tuple"""
@@ -319,10 +325,6 @@ def dumpToJson(intermediate, output):
     with open(output, "w") as f:
         json.dump(intermediate, f)
 
-def log(line):
-    if not args.quiet:
-        print("[{:.3f}s] {}".format(stopwatch(), line))
-
 def getGcovFilterOptions(args):
     return {
         "sources": set([os.path.abspath(s) for s in args.sources]), #Make paths absolute, use set for fast lookups
@@ -330,7 +332,45 @@ def getGcovFilterOptions(args):
         "exclude": args.excludepost,
     }
 
-def main(args):
+def main():
+    parser = argparse.ArgumentParser(description='A parallel gcov wrapper for fast coverage report generation')
+    parser.add_argument('-z', '--zerocounters', dest='zerocounters', action="store_true", help='Recursively delete all gcda files')
+
+    # Enable Branch Coverage
+    parser.add_argument('-b', '--branch-coverage', dest='branchcoverage', action="store_true", help='Include only the most useful branches in the coverage report.')
+    parser.add_argument('-B', '--exceptional-branch-coverage', dest='xbranchcoverage', action="store_true", help='Include ALL branches in the coverage report (including potentially noisy exceptional branches).')
+    parser.add_argument('-A', '--exclude-br-lines-starting-with', dest='exclude_branches_sw', nargs="+", metavar='', default=[], help='Exclude branches from lines starting with one of the provided strings (i.e. assert, return, etc.)')
+
+    # Filtering Options
+    parser.add_argument('-s', '--source-files', dest='sources',     nargs="+", metavar='', default=[], help='Filter: Specify exactly which source files should be included in the final report. Paths must be either absolute or relative to current directory.')
+    parser.add_argument('-e', '--exclude',      dest='excludepost', nargs="+", metavar='', default=[], help='Filter: Exclude source files from final report if they contain one of the provided substrings (i.e. /usr/include test/, etc.)')
+    parser.add_argument('-i', '--include',      dest='includepost', nargs="+", metavar='', default=[], help='Filter: Only include source files in final report that contain one of the provided substrings (i.e. src/ etc.)')
+    parser.add_argument('-f', '--gcda-files',   dest='gcda_files',  nargs="+", metavar='', default=[], help='Filter: Specify exactly which gcda files should be processed instead of recursively searching the search directory.')
+    parser.add_argument('-E', '--exclude-gcda', dest='excludepre',  nargs="+", metavar='', default=[], help='Filter: Exclude gcda files from being processed via simple find matching (not regex)')
+
+    parser.add_argument('-g', '--gcov', dest='gcov', default='gcov', help='Which gcov binary to use')
+
+    parser.add_argument('-d', '--search-directory', dest='directory', default=".", help='Base directory to recursively search for gcda files (default: .)')
+    parser.add_argument('-c', '--compiler-directory', dest='cdirectory', default=".", help='Base directory compiler was invoked from (default: .) \
+                                                                                            This needs to be set if invoking fastcov from somewhere other than the base compiler directory.')
+
+    parser.add_argument('-j', '--jobs', dest='jobs', type=int, default=multiprocessing.cpu_count(), help='Number of parallel gcov to spawn (default: %d).' % multiprocessing.cpu_count())
+    parser.add_argument('-m', '--minimum-chunk-size', dest='minimum_chunk', type=int, default=5, help='Minimum number of files a thread should process (default: 5). \
+                                                                                                       If you have only 4 gcda files but they are monstrously huge, you could change this value to a 1 so that each thread will only process 1 gcda. Otherise fastcov will spawn only 1 thread to process all of them.')
+
+    parser.add_argument('-l', '--lcov',     dest='lcov',     action="store_true", help='Output in lcov info format instead of fastcov json')
+    parser.add_argument('-r', '--gcov-raw', dest='gcov_raw', action="store_true", help='Output in gcov raw json instead of fastcov json')
+    parser.add_argument('-o', '--output',  dest='output', default="coverage.json", help='Name of output file (default: coverage.json)')
+    parser.add_argument('-q', '--quiet', dest='quiet', action="store_true", help='Suppress output to stdout')
+
+    args = parser.parse_args()
+
+    # set up global logger
+    def this_log(line):
+        logger(line, quiet=args.quiet)
+
+    log = this_log
+
     # Need at least gcov 9.0.0 because that's when gcov JSON and stdout streaming was introduced
     current_gcov_version = getGcovVersion(args.gcov)
     if current_gcov_version < MINIMUM_GCOV:
@@ -380,37 +420,5 @@ def main(args):
         dumpToJson(fastcov_json, args.output)
         log("Created fastcov json file '{}'".format(args.output))
 
-
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='A parallel gcov wrapper for fast coverage report generation')
-    parser.add_argument('-z', '--zerocounters', dest='zerocounters', action="store_true", help='Recursively delete all gcda files')
-
-    # Enable Branch Coverage
-    parser.add_argument('-b', '--branch-coverage', dest='branchcoverage', action="store_true", help='Include only the most useful branches in the coverage report.')
-    parser.add_argument('-B', '--exceptional-branch-coverage', dest='xbranchcoverage', action="store_true", help='Include ALL branches in the coverage report (including potentially noisy exceptional branches).')
-    parser.add_argument('-A', '--exclude-br-lines-starting-with', dest='exclude_branches_sw', nargs="+", metavar='', default=[], help='Exclude branches from lines starting with one of the provided strings (i.e. assert, return, etc.)')
-
-    # Filtering Options
-    parser.add_argument('-s', '--source-files', dest='sources',     nargs="+", metavar='', default=[], help='Filter: Specify exactly which source files should be included in the final report. Paths must be either absolute or relative to current directory.')
-    parser.add_argument('-e', '--exclude',      dest='excludepost', nargs="+", metavar='', default=[], help='Filter: Exclude source files from final report if they contain one of the provided substrings (i.e. /usr/include test/, etc.)')
-    parser.add_argument('-i', '--include',      dest='includepost', nargs="+", metavar='', default=[], help='Filter: Only include source files in final report that contain one of the provided substrings (i.e. src/ etc.)')
-    parser.add_argument('-f', '--gcda-files',   dest='gcda_files',  nargs="+", metavar='', default=[], help='Filter: Specify exactly which gcda files should be processed instead of recursively searching the search directory.')
-    parser.add_argument('-E', '--exclude-gcda', dest='excludepre',  nargs="+", metavar='', default=[], help='Filter: Exclude gcda files from being processed via simple find matching (not regex)')
-
-    parser.add_argument('-g', '--gcov', dest='gcov', default='gcov', help='Which gcov binary to use')
-
-    parser.add_argument('-d', '--search-directory', dest='directory', default=".", help='Base directory to recursively search for gcda files (default: .)')
-    parser.add_argument('-c', '--compiler-directory', dest='cdirectory', default=".", help='Base directory compiler was invoked from (default: .) \
-                                                                                            This needs to be set if invoking fastcov from somewhere other than the base compiler directory.')
-
-    parser.add_argument('-j', '--jobs', dest='jobs', type=int, default=multiprocessing.cpu_count(), help='Number of parallel gcov to spawn (default: %d).' % multiprocessing.cpu_count())
-    parser.add_argument('-m', '--minimum-chunk-size', dest='minimum_chunk', type=int, default=5, help='Minimum number of files a thread should process (default: 5). \
-                                                                                                       If you have only 4 gcda files but they are monstrously huge, you could change this value to a 1 so that each thread will only process 1 gcda. Otherise fastcov will spawn only 1 thread to process all of them.')
-
-    parser.add_argument('-l', '--lcov',     dest='lcov',     action="store_true", help='Output in lcov info format instead of fastcov json')
-    parser.add_argument('-r', '--gcov-raw', dest='gcov_raw', action="store_true", help='Output in gcov raw json instead of fastcov json')
-    parser.add_argument('-o', '--output',  dest='output', default="coverage.json", help='Name of output file (default: coverage.json)')
-    parser.add_argument('-q', '--quiet', dest='quiet', action="store_true", help='Suppress output to stdout')
-
-    args = parser.parse_args()
-    main(args)
+    main()
